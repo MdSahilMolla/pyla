@@ -115,6 +115,10 @@ fn parse_cpp_functions(source: &str, path: &Path) -> Program {
     let mut program = Program::new("C++", path.to_path_buf(), source.len());
     for (line_no, line) in source.lines().enumerate() {
         let Some(open) = line.find('(') else { continue };
+        let Some(close) = line[open + 1..].find(')') else {
+            continue;
+        };
+        let close = open + 1 + close;
         let prefix = line[..open].trim_end();
         let name: String = prefix
             .chars()
@@ -124,13 +128,57 @@ fn parse_cpp_functions(source: &str, path: &Path) -> Program {
             .chars()
             .rev()
             .collect();
-        if name.is_empty() || name == "if" || name == "for" || name == "while" {
+        if name.is_empty()
+            || matches!(
+                name.as_str(),
+                "if" | "for" | "while" | "switch" | "catch" | "sizeof"
+            )
+        {
             continue;
         }
+        let name_start = prefix.len().saturating_sub(name.len());
+        let return_type = prefix[..name_start].trim();
+        let return_type = return_type
+            .rfind(char::is_whitespace)
+            .filter(|separator| return_type[*separator + 1..].contains("::"))
+            .map(|separator| return_type[..separator].trim())
+            .unwrap_or(return_type);
+        let parameters = line[open + 1..close]
+            .split(',')
+            .enumerate()
+            .filter_map(|(index, parameter)| {
+                let parameter = parameter.split('=').next().unwrap_or_default().trim();
+                if parameter.is_empty() || parameter == "void" {
+                    return None;
+                }
+                let mut tokens = parameter.split_whitespace();
+                let last = tokens.next_back().unwrap_or_default();
+                let name = if last.chars().all(|character| {
+                    character.is_alphanumeric() || character == '_' || character == '*'
+                }) && last
+                    .chars()
+                    .any(|character| character.is_alphabetic() || character == '_')
+                {
+                    last.trim_start_matches('*').to_owned()
+                } else {
+                    format!("arg{index}")
+                };
+                let type_text = parameter
+                    .strip_suffix(last)
+                    .unwrap_or(parameter)
+                    .trim()
+                    .trim_end_matches('&')
+                    .trim();
+                Some(Parameter {
+                    name,
+                    ty: cpp_type_kind(type_text),
+                })
+            })
+            .collect();
         program.nodes.push(NodeKind::Function(Function {
             name,
-            parameters: Vec::new(),
-            return_type: TypeKind::Unknown,
+            parameters,
+            return_type: cpp_type_kind(return_type),
             location: SourceLocation {
                 file: path.to_path_buf(),
                 start: line_no + 1,
@@ -139,6 +187,27 @@ fn parse_cpp_functions(source: &str, path: &Path) -> Program {
         }));
     }
     program
+}
+
+fn cpp_type_kind(type_text: &str) -> TypeKind {
+    let is_char_pointer = type_text.contains("char") && type_text.contains('*');
+    let normalized = type_text
+        .replace("const", "")
+        .replace(['&', '*'], "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    match normalized.as_str() {
+        "" => TypeKind::Unknown,
+        "void" => TypeKind::Void,
+        "bool" => TypeKind::Boolean,
+        "float" | "double" => TypeKind::Float,
+        "std::string" | "string" => TypeKind::String,
+        "char" if is_char_pointer => TypeKind::String,
+        "char" | "short" | "int" | "long" | "long long" | "unsigned" | "unsigned int"
+        | "unsigned long" | "size_t" => TypeKind::Integer,
+        other => TypeKind::Custom(other.to_owned()),
+    }
 }
 
 fn structural_diagnostics(source: &str, program: &Program, language: &str) -> Vec<Diagnostic> {
@@ -294,7 +363,31 @@ mod tests {
                 Path::new("main.cpp"),
             )
             .unwrap();
-        assert_eq!(program.functions().next().unwrap().name, "add");
+        let function = program.functions().next().unwrap();
+        assert_eq!(function.name, "add");
+        assert_eq!(function.parameters.len(), 2);
+        assert_eq!(function.return_type, TypeKind::Integer);
+        assert_eq!(function.parameters[0].ty, TypeKind::Integer);
+    }
+
+    #[test]
+    fn cpp_adapter_handles_methods_and_control_flow_without_false_positives() {
+        let adapter = CppAdapter;
+        let program = adapter
+            .parse(
+                "const char* Account::owner(const std::string& value) {\n\
+                 if (value.empty()) return {};\n\
+                 return value;\n\
+                 }",
+                Path::new("account.cpp"),
+            )
+            .unwrap();
+        let functions: Vec<_> = program.functions().collect();
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "owner");
+        assert_eq!(functions[0].return_type, TypeKind::String);
+        assert_eq!(functions[0].parameters[0].name, "value");
+        assert_eq!(functions[0].parameters[0].ty, TypeKind::String);
     }
 
     #[test]

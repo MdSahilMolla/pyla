@@ -17,9 +17,13 @@ pub trait LanguageAdapter: Send + Sync {
 - C/C++: `.c`, `.cc`, `.cpp`, `.cxx`, `.h`, `.hpp`
 - Python: `.py`, `.pyw`
 
-The current parsers are intentionally lightweight structural frontends. They
-extract functions and basic diagnostics; they are not substitutes for rustc,
-Clang, or Python's full AST in complex transformations.
+The current parsers are intentionally lightweight structural frontends. The
+C++ adapter extracts qualified function and method names, parameter names, and
+common scalar return/parameter types while ignoring common control-flow calls.
+They extract structure and basic diagnostics; they are not substitutes for
+rustc, Clang, or Python's full AST in complex transformations. C++ templates,
+macros, overload resolution, and dependent types still require a future
+Clang-based adapter.
 
 ## Adding an adapter
 
