@@ -14,3 +14,4 @@ pyla-validate.workspace = true
 pyla-transform.workspace = true
 serde_json.workspace = true
 serde.workspace = true
+clap.workspace = true

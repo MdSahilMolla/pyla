@@ -1,40 +1,133 @@
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use pyla_core::Engine;
 use pyla_validate::Language;
-use std::{env, path::Path, process::ExitCode};
+use std::{
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "pyla",
+    version,
+    about = "Deterministic code engineering platform"
+)]
+struct Cli {
+    #[arg(long, global = true, help = "Emit machine-readable JSON")]
+    json: bool,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    Analyze(PathCommand),
+    Migrate {
+        path: PathBuf,
+        #[arg(long, default_value = "rust")]
+        to: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    Validate {
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = LanguageArg::Rust)]
+        language: LanguageArg,
+    },
+    Optimize(PathCommand),
+    Compare(PathCommand),
+    Worktree {
+        #[command(subcommand)]
+        command: WorktreeCommand,
+    },
+}
+
+#[derive(Debug, Args)]
+struct PathCommand {
+    path: PathBuf,
+}
+
+#[derive(Debug, Subcommand)]
+enum WorktreeCommand {
+    Create {
+        repository: PathBuf,
+        path: PathBuf,
+        branch: String,
+    },
+    Status {
+        repository: PathBuf,
+        path: PathBuf,
+    },
+    Remove {
+        repository: PathBuf,
+        path: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum LanguageArg {
+    Rust,
+    Python,
+    Cpp,
+}
+
+impl From<LanguageArg> for Language {
+    fn from(value: LanguageArg) -> Self {
+        match value {
+            LanguageArg::Rust => Self::Rust,
+            LanguageArg::Python => Self::Python,
+            LanguageArg::Cpp => Self::Cpp,
+        }
+    }
+}
 
 fn main() -> ExitCode {
-    let mut raw_args = env::args().skip(1).collect::<Vec<_>>();
-    let json = raw_args.iter().any(|arg| arg == "--json");
-    raw_args.retain(|arg| arg != "--json");
-    let mut args = raw_args.into_iter();
-    match (args.next().as_deref(), args.next()) {
-        (Some("analyze"), Some(path)) => run_analyze(Path::new(&path), json),
-        (Some("migrate"), Some(path)) => {
-            let target = args
-                .next()
-                .and_then(|flag| flag.strip_prefix("--to=").map(str::to_owned));
-            let output = args
-                .next()
-                .and_then(|flag| flag.strip_prefix("--output=").map(std::path::PathBuf::from));
-            run_migrate(
-                Path::new(&path),
-                target.as_deref().unwrap_or("Rust"),
-                output.as_deref(),
-                json,
-            )
+    let cli = Cli::parse();
+    let json = cli.json;
+    match cli.command {
+        Command::Analyze(command) => run_analyze(&command.path, json),
+        Command::Migrate { path, to, output } => run_migrate(&path, &to, output.as_deref(), json),
+        Command::Validate { path, language } => run_validate(&path, language.into(), json),
+        Command::Optimize(command) => run_optimize(&command.path, json),
+        Command::Compare(command) => run_compare(&command.path, json),
+        Command::Worktree { command } => run_worktree(command, json),
+    }
+}
+
+fn run_worktree(command: WorktreeCommand, json: bool) -> ExitCode {
+    let engine = Engine::default();
+    let result = match command {
+        WorktreeCommand::Create {
+            repository,
+            path,
+            branch,
+        } => engine
+            .create_worktree(&repository, &path, &branch)
+            .map(|worktree| serde_json::json!({"path": worktree.path, "branch": worktree.branch})),
+        WorktreeCommand::Status { repository, path } => pyla_transform::Worktree {
+            repository,
+            path,
+            branch: String::new(),
         }
-        (Some("validate"), Some(path)) => {
-            let language = args
-                .next()
-                .and_then(|flag| parse_language(flag.strip_prefix("--language=")?));
-            run_validate(Path::new(&path), language.unwrap_or(Language::Rust), json)
+        .status()
+        .map(|status| serde_json::json!({"status": status})),
+        WorktreeCommand::Remove { repository, path } => pyla_transform::Worktree {
+            repository,
+            path,
+            branch: String::new(),
         }
-        (Some("worktree"), Some(action)) => run_worktree(&action, &mut args),
-        (Some("optimize"), Some(path)) => run_optimize(Path::new(&path), json),
-        (Some("compare"), Some(path)) => run_compare(Path::new(&path), json),
-        _ => {
-            eprintln!("Usage: pyla analyze <path> | pyla migrate <path> --to=<language> [--output=<dir>] | pyla validate <path> --language=<rust|python|cpp> | pyla optimize <python-file> [--json] | pyla compare <case-file.json> [--json] | pyla worktree <create|status|remove> ...");
-            ExitCode::from(2)
+        .remove()
+        .map(|_| serde_json::json!({"removed": true})),
+    };
+    match result {
+        Ok(value) if json => print_json(&value, false),
+        Ok(value) => {
+            println!("{}", value);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("pyla: {error}");
+            ExitCode::from(1)
         }
     }
 }
@@ -55,17 +148,14 @@ fn run_optimize(path: &Path, json: bool) -> ExitCode {
     if json {
         return print_json(&candidates, false);
     }
-
     if candidates.is_empty() {
         println!("No deterministic optimization candidates found.");
-    } else {
-        for candidate in candidates {
-            println!(
-                "{}: {} ({})",
-                candidate.rule_id, candidate.function, candidate.reason
-            );
-            println!("{}", candidate.generated_module);
-        }
+    }
+    for candidate in candidates {
+        println!(
+            "{}: {} ({})\n{}",
+            candidate.rule_id, candidate.function, candidate.reason, candidate.generated_module
+        );
     }
     ExitCode::SUCCESS
 }
@@ -78,7 +168,7 @@ fn run_compare(path: &Path, json: bool) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let cases: Vec<(String, String, String)> = match serde_json::from_str(&contents) {
+    let cases = match serde_json::from_str(&contents) {
         Ok(cases) => cases,
         Err(error) => {
             eprintln!("pyla: invalid comparison JSON: {error}");
@@ -93,91 +183,10 @@ fn run_compare(path: &Path, json: bool) -> ExitCode {
         "Differential verification: {}",
         if report.passed { "passed" } else { "failed" }
     );
-    for case in report.cases {
-        println!(
-            "{}: {} => {}",
-            case.input, case.source_output, case.candidate_output
-        );
-    }
     if report.passed {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
-    }
-}
-
-fn run_worktree(action: &str, args: &mut impl Iterator<Item = String>) -> ExitCode {
-    let engine = Engine::default();
-    let result = match action {
-        "create" => {
-            let repository = args.next().map(std::path::PathBuf::from);
-            let path = args.next().map(std::path::PathBuf::from);
-            let branch = args.next();
-            match (repository, path, branch) {
-                (Some(repository), Some(path), Some(branch)) => engine
-                    .create_worktree(&repository, &path, &branch)
-                    .map(|worktree| {
-                        println!(
-                            "Created worktree {} on branch {}",
-                            worktree.path.display(),
-                            worktree.branch
-                        )
-                    }),
-                _ => Err(pyla_transform::WorktreeError::Invalid(
-                    "usage: pyla worktree create <repository> <path> <branch>".into(),
-                )),
-            }
-        }
-        "status" => {
-            let repository = args.next().map(std::path::PathBuf::from);
-            let path = args.next().map(std::path::PathBuf::from);
-            match (repository, path) {
-                (Some(repository), Some(path)) => pyla_transform::Worktree {
-                    repository,
-                    path,
-                    branch: String::new(),
-                }
-                .status()
-                .map(|status| println!("{status}")),
-                _ => Err(pyla_transform::WorktreeError::Invalid(
-                    "usage: pyla worktree status <repository> <path>".into(),
-                )),
-            }
-        }
-        "remove" => {
-            let repository = args.next().map(std::path::PathBuf::from);
-            let path = args.next().map(std::path::PathBuf::from);
-            match (repository, path) {
-                (Some(repository), Some(path)) => pyla_transform::Worktree {
-                    repository,
-                    path,
-                    branch: String::new(),
-                }
-                .remove(),
-                _ => Err(pyla_transform::WorktreeError::Invalid(
-                    "usage: pyla worktree remove <repository> <path>".into(),
-                )),
-            }
-        }
-        _ => Err(pyla_transform::WorktreeError::Invalid(
-            "unknown worktree action".into(),
-        )),
-    };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("pyla: {error}");
-            ExitCode::from(1)
-        }
-    }
-}
-
-fn parse_language(value: &str) -> Option<Language> {
-    match value.to_ascii_lowercase().as_str() {
-        "rust" => Some(Language::Rust),
-        "python" | "py" => Some(Language::Python),
-        "cpp" | "c++" | "c" => Some(Language::Cpp),
-        _ => None,
     }
 }
 
@@ -186,12 +195,14 @@ fn run_validate(path: &Path, language: Language, json: bool) -> ExitCode {
     if json {
         return print_json(&result, result.passed == Some(false));
     }
-    let passed = result
-        .passed
-        .map_or("not run", |passed| if passed { "yes" } else { "no" });
     println!(
         "Tool: {}\nAvailable: {}\nPassed: {}\n{}",
-        result.tool, result.available, passed, result.detail
+        result.tool,
+        result.available,
+        result
+            .passed
+            .map_or("not run", |passed| if passed { "yes" } else { "no" }),
+        result.detail
     );
     if result.passed == Some(false) {
         ExitCode::from(1)
@@ -204,10 +215,8 @@ fn run_migrate(path: &Path, target: &str, output: Option<&Path>, json: bool) -> 
     let engine = Engine::default();
     if let Some(output) = output {
         return match engine.generate_migration(path, target, output) {
+            Ok(files) if json => print_json(&files, false),
             Ok(files) => {
-                if json {
-                    return print_json(&files, false);
-                }
                 for file in files {
                     println!("Generated {}", file.display());
                 }
@@ -220,13 +229,8 @@ fn run_migrate(path: &Path, target: &str, output: Option<&Path>, json: bool) -> 
         };
     }
     match engine.migration_plan(path, target) {
+        Ok(plans) if json => print_json(&plans, false),
         Ok(plans) => {
-            if json {
-                return print_json(&plans, false);
-            }
-            if plans.is_empty() {
-                println!("No supported source files found.");
-            }
             for plan in plans {
                 println!("{plan}");
             }
@@ -250,15 +254,15 @@ fn run_analyze(path: &Path, json: bool) -> ExitCode {
     if json {
         return print_json(&report, false);
     }
-    let project = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(".");
-    println!("PYLA Code Analysis\n------------------\n\nProject: {project}\n\nLanguages detected:");
+    println!(
+        "PYLA Code Analysis\n------------------\n\nProject: {}\n\nLanguages detected:",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(".")
+    );
     for (language, count) in &report.languages {
         println!("  {language}: {count} files");
     }
-
     println!("\nFiles analyzed: {}\n\nDiagnostics:\n  Errors:       {}\n  Warnings:     {}\n  Suggestions:  {}\n\nAnalysis completed.", report.files_analyzed, report.errors(), report.warnings(), report.suggestions());
     for diagnostic in &report.diagnostics {
         println!(

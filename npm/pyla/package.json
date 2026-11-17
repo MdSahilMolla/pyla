@@ -1,0 +1,21 @@
+{
+  "name": "@pyla/cli",
+  "version": "0.1.0",
+  "description": "JavaScript and CLI wrapper for the deterministic PYLA code-engineering platform",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "pyla": "bin/pyla.js"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

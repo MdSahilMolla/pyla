@@ -1,0 +1,21 @@
+{
+  "name": "@pyla/mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing the deterministic PYLA code-engineering platform",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "pyla-mcp": "server.js"
+  },
+  "files": [
+    "server.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.25.0"
+  }
+}
