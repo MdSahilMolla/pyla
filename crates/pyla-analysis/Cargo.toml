@@ -1,0 +1,10 @@
+[package]
+name = "pyla-analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pyla-frontend.workspace = true
+pyla-ir.workspace = true
+serde.workspace = true

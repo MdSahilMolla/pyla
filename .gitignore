@@ -1,0 +1,17 @@
+# Rust build output
+/target/
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
+
+# Local Claude Code state
+.claude/
+
+# Python and notebook artifacts
+__pycache__/
+.ipynb_checkpoints/
+
+# Output from `pyla migrate --output=...` runs
+/migration-output/

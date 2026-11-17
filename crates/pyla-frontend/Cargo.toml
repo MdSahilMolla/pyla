@@ -1,0 +1,9 @@
+[package]
+name = "pyla-frontend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pyla-ir.workspace = true
+serde.workspace = true

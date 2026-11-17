@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pyla-ir",
+    "crates/pyla-frontend",
+    "crates/pyla-analysis",
+    "crates/pyla-transform",
+    "crates/pyla-validate",
+    "crates/pyla-core",
+    "crates/pyla-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+pyla-ir = { path = "crates/pyla-ir" }
+pyla-frontend = { path = "crates/pyla-frontend" }
+pyla-analysis = { path = "crates/pyla-analysis" }
+pyla-transform = { path = "crates/pyla-transform" }
+pyla-validate = { path = "crates/pyla-validate" }
+pyla-core = { path = "crates/pyla-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
